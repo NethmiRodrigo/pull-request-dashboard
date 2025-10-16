@@ -389,3 +389,73 @@ export function getRateLimitInfo(
 
   return null;
 }
+
+export interface GitHubRepository {
+  id: number;
+  name: string;
+  full_name: string;
+  description: string | null;
+  private: boolean;
+  owner: {
+    login: string;
+    avatar_url: string;
+  };
+  stargazers_count: number;
+  language: string | null;
+}
+
+export interface RepositorySearchResult {
+  total_count: number;
+  incomplete_results: boolean;
+  items: GitHubRepository[];
+}
+
+export async function searchRepositories(
+  query: string,
+  token: string,
+  limit: number = 10
+): Promise<GitHubRepository[]> {
+  if (!token) {
+    throw new GitHubAPIError("GitHub token is required", 401);
+  }
+
+  if (!query.trim()) {
+    return [];
+  }
+
+  const headers = {
+    Accept: "application/vnd.github+json",
+    Authorization: `Bearer ${token}`,
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+
+  try {
+    // Search for repositories with the query
+    const searchUrl = `${GITHUB_API_BASE}/search/repositories?q=${encodeURIComponent(
+      query
+    )}&sort=stars&order=desc&per_page=${limit}`;
+
+    const response = await fetch(searchUrl, { headers });
+
+    if (!response.ok) {
+      const errorData: GitHubError = await response.json().catch(() => ({}));
+      throw new GitHubAPIError(
+        errorData.message || "Failed to search repositories",
+        response.status
+      );
+    }
+
+    const searchResult: RepositorySearchResult = await response.json();
+    return searchResult.items;
+  } catch (error) {
+    if (error instanceof GitHubAPIError) {
+      throw error;
+    }
+    throw new GitHubAPIError(
+      `Failed to search repositories: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`,
+      500
+    );
+  }
+}
