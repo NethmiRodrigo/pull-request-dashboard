@@ -151,7 +151,7 @@ export function PRDashboard() {
   };
 
   const fetchPRs = useCallback(async () => {
-    if (!githubToken || watchedRepos.length === 0) {
+    if (!githubToken) {
       return;
     }
 
@@ -188,14 +188,14 @@ export function PRDashboard() {
 
   // Fetch PRs when token or watched repos change
   useEffect(() => {
-    if (githubToken && watchedRepos.length > 0) {
+    if (githubToken) {
       fetchPRs();
     }
   }, [fetchPRs, githubToken, watchedRepos.length]);
 
   // Auto-refresh every 5 minutes
   useEffect(() => {
-    if (!githubToken || watchedRepos.length === 0) {
+    if (!githubToken) {
       return;
     }
 
@@ -246,8 +246,10 @@ export function PRDashboard() {
         return pr.status === activeTab;
       })();
 
-      const matchesWatchedRepo =
+      // Include PRs from watched repos OR review-requested PRs (even if not in watched repos)
+      const isFromWatchedRepo =
         watchedRepos.length === 0 || watchedRepos.includes(pr.repo);
+      const matchesWatchedRepo = isFromWatchedRepo || pr.isReviewRequested;
       const matchesRepo = selectedRepo === "all" || pr.repo === selectedRepo;
 
       return matchesSearch && matchesTab && matchesWatchedRepo && matchesRepo;
@@ -268,8 +270,9 @@ export function PRDashboard() {
           label.toLowerCase() === "automated-pr" ||
           label.toLowerCase() === "dependencies"
       );
-      const matchesWatchedRepo =
+      const isFromWatchedRepo =
         watchedRepos.length === 0 || watchedRepos.includes(pr.repo);
+      const matchesWatchedRepo = isFromWatchedRepo || pr.isReviewRequested;
       const matchesRepo = selectedRepo === "all" || pr.repo === selectedRepo;
       return !hasExcludedLabels && matchesWatchedRepo && matchesRepo;
     }).length,
@@ -280,8 +283,9 @@ export function PRDashboard() {
           label.toLowerCase() === "automated-pr" ||
           label.toLowerCase() === "dependencies"
       );
-      const matchesWatchedRepo =
+      const isFromWatchedRepo =
         watchedRepos.length === 0 || watchedRepos.includes(pr.repo);
+      const matchesWatchedRepo = isFromWatchedRepo || pr.isReviewRequested;
       const matchesRepo = selectedRepo === "all" || pr.repo === selectedRepo;
       return (
         !hasExcludedLabels &&
@@ -297,8 +301,9 @@ export function PRDashboard() {
           label.toLowerCase() === "automated-pr" ||
           label.toLowerCase() === "dependencies"
       );
-      const matchesWatchedRepo =
+      const isFromWatchedRepo =
         watchedRepos.length === 0 || watchedRepos.includes(pr.repo);
+      const matchesWatchedRepo = isFromWatchedRepo || pr.isReviewRequested;
       const matchesRepo = selectedRepo === "all" || pr.repo === selectedRepo;
       return (
         !hasExcludedLabels &&
@@ -314,8 +319,9 @@ export function PRDashboard() {
           label.toLowerCase() === "automated-pr" ||
           label.toLowerCase() === "dependencies"
       );
-      const matchesWatchedRepo =
+      const isFromWatchedRepo =
         watchedRepos.length === 0 || watchedRepos.includes(pr.repo);
+      const matchesWatchedRepo = isFromWatchedRepo || pr.isReviewRequested;
       const matchesRepo = selectedRepo === "all" || pr.repo === selectedRepo;
       return (
         !hasExcludedLabels &&
@@ -331,8 +337,9 @@ export function PRDashboard() {
           label.toLowerCase() === "automated-pr" ||
           label.toLowerCase() === "dependencies"
       );
-      const matchesWatchedRepo =
+      const isFromWatchedRepo =
         watchedRepos.length === 0 || watchedRepos.includes(pr.repo);
+      const matchesWatchedRepo = isFromWatchedRepo || pr.isReviewRequested;
       const matchesRepo = selectedRepo === "all" || pr.repo === selectedRepo;
 
       if (!pr.lastReviewedByCurrentUser) return false;
@@ -359,8 +366,9 @@ export function PRDashboard() {
           label.toLowerCase() === "automated-pr" ||
           label.toLowerCase() === "dependencies"
       );
-      const matchesWatchedRepo =
+      const isFromWatchedRepo =
         watchedRepos.length === 0 || watchedRepos.includes(pr.repo);
+      const matchesWatchedRepo = isFromWatchedRepo || pr.isReviewRequested;
       const matchesRepo = selectedRepo === "all" || pr.repo === selectedRepo;
 
       return (

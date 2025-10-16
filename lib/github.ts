@@ -51,6 +51,7 @@ export interface ProcessedPR {
   labels: string[];
   url: string;
   lastReviewedByCurrentUser: string | null;
+  isReviewRequested: boolean;
 }
 
 export interface GitHubError {
@@ -79,86 +80,50 @@ export async function fetchPullRequests(
     throw new GitHubAPIError("GitHub token is required", 401);
   }
 
-  if (repos.length === 0) {
-    return [];
-  }
-
-  const headers = {
-    Accept: "application/vnd.github+json",
-    Authorization: `Bearer ${token}`,
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-
   const allPRs: ProcessedPR[] = [];
 
   try {
     // Get current user information
     const currentUser = await getCurrentUser(token);
 
-    // Fetch PRs for all repositories in parallel
-    const promises = repos.map(async (repo) => {
-      const [owner, repoName] = repo.split("/");
-      if (!owner || !repoName) {
-        throw new Error(`Invalid repository format: ${repo}`);
-      }
+    // Fetch PRs from watched repositories and review-requested PRs in parallel
+    const promises: Promise<ProcessedPR[]>[] = [];
 
-      const url = `${GITHUB_API_BASE}/repos/${owner}/${repoName}/pulls?state=open&sort=updated&direction=desc&per_page=100`;
-
-      const response = await fetch(url, { headers });
-
-      if (!response.ok) {
-        const errorData: GitHubError = await response.json().catch(() => ({}));
-        const rateLimitRemaining = response.headers.get(
-          "X-RateLimit-Remaining"
-        );
-
-        throw new GitHubAPIError(
-          errorData.message || `Failed to fetch PRs for ${repo}`,
-          response.status,
-          rateLimitRemaining ? parseInt(rateLimitRemaining) : undefined
-        );
-      }
-
-      const prs: GitHubPR[] = await response.json();
-
-      // Fetch reviews for each PR
-      const prsWithReviews = await Promise.all(
-        prs.map(async (pr) => {
-          try {
-            const reviewsUrl = `${GITHUB_API_BASE}/repos/${owner}/${repoName}/pulls/${pr.number}/reviews`;
-            const reviewsResponse = await fetch(reviewsUrl, { headers });
-
-            if (reviewsResponse.ok) {
-              const reviews = await reviewsResponse.json();
-              return { ...pr, reviews };
-            }
-            return pr; // Return PR without reviews if fetch fails
-          } catch {
-            return pr; // Return PR without reviews if fetch fails
-          }
-        })
+    // Add PRs from watched repositories if any are specified
+    if (repos.length > 0) {
+      const watchedRepoPRs = fetchWatchedRepositoryPRs(
+        repos,
+        token,
+        currentUser.login
       );
+      promises.push(watchedRepoPRs);
+    }
 
-      // Process each PR with current user context
-      const processedPRs = prsWithReviews.map((pr) =>
-        processPR(pr, repo, currentUser.login)
-      );
-
-      return processedPRs;
-    });
+    // Always fetch review-requested PRs
+    const reviewRequestedPRs = fetchReviewRequestedPRs(token);
+    promises.push(reviewRequestedPRs);
 
     const results = await Promise.all(promises);
 
     // Flatten all PRs into a single array
     results.forEach((prs) => allPRs.push(...prs));
 
+    // Remove duplicates based on PR ID (same PR might appear in both watched repos and review-requested)
+    const uniquePRs = allPRs.reduce((acc, pr) => {
+      if (!acc.find((existingPR) => existingPR.id === pr.id)) {
+        acc.push(pr);
+      }
+      return acc;
+    }, [] as ProcessedPR[]);
+
     // Sort by updated_at (most recent first)
-    allPRs.sort(
+    uniquePRs.sort(
       (a, b) =>
-        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        new Date(b.updatedAtTimestamp).getTime() -
+        new Date(a.updatedAtTimestamp).getTime()
     );
 
-    return allPRs;
+    return uniquePRs;
   } catch (error) {
     if (error instanceof GitHubAPIError) {
       throw error;
@@ -172,10 +137,82 @@ export async function fetchPullRequests(
   }
 }
 
+async function fetchWatchedRepositoryPRs(
+  repos: string[],
+  token: string,
+  currentUser: string
+): Promise<ProcessedPR[]> {
+  const headers = {
+    Accept: "application/vnd.github+json",
+    Authorization: `Bearer ${token}`,
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+
+  const allPRs: ProcessedPR[] = [];
+
+  // Fetch PRs for all repositories in parallel
+  const promises = repos.map(async (repo) => {
+    const [owner, repoName] = repo.split("/");
+    if (!owner || !repoName) {
+      throw new Error(`Invalid repository format: ${repo}`);
+    }
+
+    const url = `${GITHUB_API_BASE}/repos/${owner}/${repoName}/pulls?state=open&sort=updated&direction=desc&per_page=100`;
+
+    const response = await fetch(url, { headers });
+
+    if (!response.ok) {
+      const errorData: GitHubError = await response.json().catch(() => ({}));
+      const rateLimitRemaining = response.headers.get("X-RateLimit-Remaining");
+
+      throw new GitHubAPIError(
+        errorData.message || `Failed to fetch PRs for ${repo}`,
+        response.status,
+        rateLimitRemaining ? parseInt(rateLimitRemaining) : undefined
+      );
+    }
+
+    const prs: GitHubPR[] = await response.json();
+
+    // Fetch reviews for each PR
+    const prsWithReviews = await Promise.all(
+      prs.map(async (pr) => {
+        try {
+          const reviewsUrl = `${GITHUB_API_BASE}/repos/${owner}/${repoName}/pulls/${pr.number}/reviews`;
+          const reviewsResponse = await fetch(reviewsUrl, { headers });
+
+          if (reviewsResponse.ok) {
+            const reviews = await reviewsResponse.json();
+            return { ...pr, reviews };
+          }
+          return pr; // Return PR without reviews if fetch fails
+        } catch {
+          return pr; // Return PR without reviews if fetch fails
+        }
+      })
+    );
+
+    // Process each PR with current user context
+    const processedPRs = prsWithReviews.map((pr) =>
+      processPR(pr, repo, currentUser, false)
+    );
+
+    return processedPRs;
+  });
+
+  const results = await Promise.all(promises);
+
+  // Flatten all PRs into a single array
+  results.forEach((prs) => allPRs.push(...prs));
+
+  return allPRs;
+}
+
 export function processPR(
   pr: GitHubPR,
   repo: string,
-  currentUser: string
+  currentUser: string,
+  isReviewRequested: boolean = false
 ): ProcessedPR {
   const status = calculatePRStatus(pr, currentUser);
   const updatedAt = formatRelativeTime(pr.updated_at);
@@ -215,6 +252,7 @@ export function processPR(
     labels: pr.labels.map((label) => label.name),
     url: pr.html_url,
     lastReviewedByCurrentUser,
+    isReviewRequested,
   };
 }
 
@@ -408,6 +446,98 @@ export interface RepositorySearchResult {
   total_count: number;
   incomplete_results: boolean;
   items: GitHubRepository[];
+}
+
+export async function fetchReviewRequestedPRs(
+  token: string
+): Promise<ProcessedPR[]> {
+  if (!token) {
+    throw new GitHubAPIError("GitHub token is required", 401);
+  }
+
+  const headers = {
+    Accept: "application/vnd.github+json",
+    Authorization: `Bearer ${token}`,
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+
+  try {
+    // Get current user information
+    const currentUser = await getCurrentUser(token);
+
+    // Search for PRs where the current user is requested for review
+    const searchUrl = `${GITHUB_API_BASE}/search/issues?q=is:pr+is:open+review-requested:${currentUser.login}&sort=updated&order=desc&per_page=100`;
+
+    const response = await fetch(searchUrl, { headers });
+
+    if (!response.ok) {
+      const errorData: GitHubError = await response.json().catch(() => ({}));
+      throw new GitHubAPIError(
+        errorData.message || "Failed to fetch review-requested PRs",
+        response.status
+      );
+    }
+
+    const searchResult: { items: GitHubPR[] } = await response.json();
+    const prs = searchResult.items;
+
+    // Fetch reviews for each PR
+    const prsWithReviews = await Promise.all(
+      prs.map(async (pr) => {
+        try {
+          // Extract repo from the PR URL
+          const repoUrl = pr.html_url;
+          const repoMatch = repoUrl.match(
+            /github\.com\/([^\/]+)\/([^\/]+)\/pull/
+          );
+          if (!repoMatch) return pr;
+
+          const [, owner, repoName] = repoMatch;
+          const reviewsUrl = `${GITHUB_API_BASE}/repos/${owner}/${repoName}/pulls/${pr.number}/reviews`;
+          const reviewsResponse = await fetch(reviewsUrl, { headers });
+
+          if (reviewsResponse.ok) {
+            const reviews = await reviewsResponse.json();
+            return { ...pr, reviews };
+          }
+          return pr; // Return PR without reviews if fetch fails
+        } catch {
+          return pr; // Return PR without reviews if fetch fails
+        }
+      })
+    );
+
+    // Process each PR with current user context
+    const processedPRs = prsWithReviews.map((pr) => {
+      // Extract repo from the PR URL
+      const repoUrl = pr.html_url;
+      const repoMatch = repoUrl.match(/github\.com\/([^\/]+)\/([^\/]+)\/pull/);
+      const repo = repoMatch
+        ? `${repoMatch[1]}/${repoMatch[2]}`
+        : "unknown/unknown";
+
+      return processPR(pr, repo, currentUser.login, true);
+    });
+
+    // Sort by updated_at (most recent first)
+    processedPRs.sort(
+      (a, b) =>
+        new Date(b.updatedAtTimestamp).getTime() -
+        new Date(a.updatedAtTimestamp).getTime()
+    );
+
+    return processedPRs;
+  } catch (error) {
+    if (error instanceof GitHubAPIError) {
+      throw error;
+    }
+    throw new GitHubAPIError(
+      `Failed to fetch review-requested PRs: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`,
+      500
+    );
+  }
 }
 
 export async function searchRepositories(

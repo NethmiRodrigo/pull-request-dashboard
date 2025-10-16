@@ -8,6 +8,7 @@ import {
   AlertCircle,
   RefreshCw,
   CheckCircle,
+  UserCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +27,7 @@ export interface PR {
   labels: string[];
   url: string;
   lastReviewedByCurrentUser: string | null;
+  isReviewRequested: boolean;
 }
 
 interface PRCardProps {
@@ -105,6 +107,15 @@ export function PRCard({ pr }: PRCardProps) {
             <Badge variant="outline" className={cn("text-xs", config.color)}>
               {config.label}
             </Badge>
+            {pr.isReviewRequested && (
+              <Badge
+                variant="outline"
+                className="text-xs text-blue-600 border-blue-200 bg-blue-50"
+              >
+                <UserCheck className="mr-1 h-3 w-3" />
+                Review Requested
+              </Badge>
+            )}
             {pr.labels.map((label) => (
               <Badge key={label} variant="secondary" className="text-xs">
                 {label}
