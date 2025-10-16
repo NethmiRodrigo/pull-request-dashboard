@@ -19,10 +19,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { type PR, PRCard } from "@/components/pr-card";
+import { type PR } from "@/components/pr-card";
+import { PRDataTable } from "@/components/pr-data-table";
+import { PRGroupedTables } from "@/components/pr-grouped-tables";
 import { RepositorySettings } from "@/components/repository-settings";
 import { TokenSetup } from "@/components/token-setup";
-import { fetchPullRequests, GitHubAPIError } from "@/lib/github";
+import {
+  fetchPullRequests,
+  GitHubAPIError,
+  getCurrentUser,
+} from "@/lib/github";
 import {
   storeTokenSecurely,
   getStoredToken,
@@ -30,7 +36,13 @@ import {
   migratePlainTextToken,
 } from "@/lib/token-storage";
 
-type PRStatus = "all" | "pending" | "re-review" | "stagnant";
+type PRStatus =
+  | "all"
+  | "pending"
+  | "re-review"
+  | "stagnant"
+  | "reviewed-today"
+  | "your-prs";
 
 export function PRDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -43,6 +55,7 @@ export function PRDashboard() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [currentUser, setCurrentUser] = useState<string | null>(null);
 
   // Load saved data from localStorage
   useEffect(() => {
@@ -112,6 +125,10 @@ export function PRDashboard() {
     setError(null);
 
     try {
+      // Get current user information
+      const user = await getCurrentUser(githubToken);
+      setCurrentUser(user.login);
+
       const fetchedPRs = await fetchPullRequests(watchedRepos, githubToken);
       setPRs(fetchedPRs);
       setLastRefresh(new Date());
@@ -159,41 +176,166 @@ export function PRDashboard() {
     fetchPRs();
   };
 
-  const filteredPRs = prs.filter((pr) => {
-    const matchesSearch =
-      pr.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      pr.repo.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesTab = activeTab === "all" || pr.status === activeTab;
-    const matchesWatchedRepo =
-      watchedRepos.length === 0 || watchedRepos.includes(pr.repo);
-    const matchesRepo = selectedRepo === "all" || pr.repo === selectedRepo;
-    return matchesSearch && matchesTab && matchesWatchedRepo && matchesRepo;
-  });
+  const filteredPRs = prs
+    .filter((pr) => {
+      const matchesSearch =
+        pr.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        pr.repo.toLowerCase().includes(searchQuery.toLowerCase());
+
+      // Exclude PRs with 'automated', 'automated-pr', or 'dependencies' labels
+      const hasExcludedLabels = pr.labels.some(
+        (label) =>
+          label.toLowerCase() === "automated" ||
+          label.toLowerCase() === "automated-pr" ||
+          label.toLowerCase() === "dependencies"
+      );
+      if (hasExcludedLabels) return false;
+
+      // Handle status filtering including reviewed-today and your-prs
+      const matchesTab = (() => {
+        if (activeTab === "all") return true;
+        if (activeTab === "reviewed-today") {
+          if (!pr.lastReviewedByCurrentUser) return false;
+
+          const reviewDate = new Date(pr.lastReviewedByCurrentUser);
+          const today = new Date();
+
+          return (
+            reviewDate.getFullYear() === today.getFullYear() &&
+            reviewDate.getMonth() === today.getMonth() &&
+            reviewDate.getDate() === today.getDate()
+          );
+        }
+        if (activeTab === "your-prs") {
+          return currentUser && pr.author === currentUser;
+        }
+        return pr.status === activeTab;
+      })();
+
+      const matchesWatchedRepo =
+        watchedRepos.length === 0 || watchedRepos.includes(pr.repo);
+      const matchesRepo = selectedRepo === "all" || pr.repo === selectedRepo;
+
+      return matchesSearch && matchesTab && matchesWatchedRepo && matchesRepo;
+    })
+    .sort((a, b) => {
+      // Sort by updated timestamp (most recent first)
+      return (
+        new Date(b.updatedAtTimestamp).getTime() -
+        new Date(a.updatedAtTimestamp).getTime()
+      );
+    });
 
   const counts = {
     all: prs.filter((pr) => {
+      const hasExcludedLabels = pr.labels.some(
+        (label) =>
+          label.toLowerCase() === "automated" ||
+          label.toLowerCase() === "automated-pr" ||
+          label.toLowerCase() === "dependencies"
+      );
       const matchesWatchedRepo =
         watchedRepos.length === 0 || watchedRepos.includes(pr.repo);
       const matchesRepo = selectedRepo === "all" || pr.repo === selectedRepo;
-      return matchesWatchedRepo && matchesRepo;
+      return !hasExcludedLabels && matchesWatchedRepo && matchesRepo;
     }).length,
     pending: prs.filter((pr) => {
+      const hasExcludedLabels = pr.labels.some(
+        (label) =>
+          label.toLowerCase() === "automated" ||
+          label.toLowerCase() === "automated-pr" ||
+          label.toLowerCase() === "dependencies"
+      );
       const matchesWatchedRepo =
         watchedRepos.length === 0 || watchedRepos.includes(pr.repo);
       const matchesRepo = selectedRepo === "all" || pr.repo === selectedRepo;
-      return pr.status === "pending" && matchesWatchedRepo && matchesRepo;
+      return (
+        !hasExcludedLabels &&
+        pr.status === "pending" &&
+        matchesWatchedRepo &&
+        matchesRepo
+      );
     }).length,
     "re-review": prs.filter((pr) => {
+      const hasExcludedLabels = pr.labels.some(
+        (label) =>
+          label.toLowerCase() === "automated" ||
+          label.toLowerCase() === "automated-pr" ||
+          label.toLowerCase() === "dependencies"
+      );
       const matchesWatchedRepo =
         watchedRepos.length === 0 || watchedRepos.includes(pr.repo);
       const matchesRepo = selectedRepo === "all" || pr.repo === selectedRepo;
-      return pr.status === "re-review" && matchesWatchedRepo && matchesRepo;
+      return (
+        !hasExcludedLabels &&
+        pr.status === "re-review" &&
+        matchesWatchedRepo &&
+        matchesRepo
+      );
     }).length,
     stagnant: prs.filter((pr) => {
+      const hasExcludedLabels = pr.labels.some(
+        (label) =>
+          label.toLowerCase() === "automated" ||
+          label.toLowerCase() === "automated-pr" ||
+          label.toLowerCase() === "dependencies"
+      );
       const matchesWatchedRepo =
         watchedRepos.length === 0 || watchedRepos.includes(pr.repo);
       const matchesRepo = selectedRepo === "all" || pr.repo === selectedRepo;
-      return pr.status === "stagnant" && matchesWatchedRepo && matchesRepo;
+      return (
+        !hasExcludedLabels &&
+        pr.status === "stagnant" &&
+        matchesWatchedRepo &&
+        matchesRepo
+      );
+    }).length,
+    "reviewed-today": prs.filter((pr) => {
+      const hasExcludedLabels = pr.labels.some(
+        (label) =>
+          label.toLowerCase() === "automated" ||
+          label.toLowerCase() === "automated-pr" ||
+          label.toLowerCase() === "dependencies"
+      );
+      const matchesWatchedRepo =
+        watchedRepos.length === 0 || watchedRepos.includes(pr.repo);
+      const matchesRepo = selectedRepo === "all" || pr.repo === selectedRepo;
+
+      if (!pr.lastReviewedByCurrentUser) return false;
+
+      const reviewDate = new Date(pr.lastReviewedByCurrentUser);
+      const today = new Date();
+
+      const isReviewedToday =
+        reviewDate.getFullYear() === today.getFullYear() &&
+        reviewDate.getMonth() === today.getMonth() &&
+        reviewDate.getDate() === today.getDate();
+
+      return (
+        !hasExcludedLabels &&
+        isReviewedToday &&
+        matchesWatchedRepo &&
+        matchesRepo
+      );
+    }).length,
+    "your-prs": prs.filter((pr) => {
+      const hasExcludedLabels = pr.labels.some(
+        (label) =>
+          label.toLowerCase() === "automated" ||
+          label.toLowerCase() === "automated-pr" ||
+          label.toLowerCase() === "dependencies"
+      );
+      const matchesWatchedRepo =
+        watchedRepos.length === 0 || watchedRepos.includes(pr.repo);
+      const matchesRepo = selectedRepo === "all" || pr.repo === selectedRepo;
+
+      return (
+        !hasExcludedLabels &&
+        currentUser &&
+        pr.author === currentUser &&
+        matchesWatchedRepo &&
+        matchesRepo
+      );
     }).length,
   };
 
@@ -326,7 +468,7 @@ export function PRDashboard() {
           </div>
         </div>
 
-        {/* PR Cards */}
+        {/* PR Tables */}
         {isLoading && prs.length === 0 ? (
           <div className="flex items-center justify-center py-12">
             <div className="text-center space-y-4">
@@ -349,11 +491,17 @@ export function PRDashboard() {
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {filteredPRs.map((pr) => (
-              <PRCard key={pr.id} pr={pr} />
-            ))}
-          </div>
+          <>
+            {activeTab === "all" || activeTab === "pending" ? (
+              <PRGroupedTables prs={filteredPRs} />
+            ) : (
+              <PRDataTable
+                prs={filteredPRs}
+                showPagination={true}
+                pageSize={10}
+              />
+            )}
+          </>
         )}
 
         {/* Repository Settings */}

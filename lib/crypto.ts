@@ -33,7 +33,7 @@ async function deriveKey(
   return crypto.subtle.deriveKey(
     {
       name: "PBKDF2",
-      salt: salt,
+      salt: salt.buffer as ArrayBuffer,
       iterations: 100000, // High iteration count for security
       hash: "SHA-256",
     },
@@ -75,7 +75,7 @@ export async function encryptToken(
     const key = await deriveKey(passphrase, salt);
 
     const encrypted = await crypto.subtle.encrypt(
-      { name: ALGORITHM, iv: iv },
+      { name: ALGORITHM, iv: iv.buffer as ArrayBuffer },
       key,
       new TextEncoder().encode(token)
     );
@@ -123,7 +123,7 @@ export async function decryptToken(
     const key = await deriveKey(passphrase, salt);
 
     const decrypted = await crypto.subtle.decrypt(
-      { name: ALGORITHM, iv: iv },
+      { name: ALGORITHM, iv: iv.buffer as ArrayBuffer },
       key,
       encrypted
     );
@@ -139,18 +139,21 @@ export async function decryptToken(
  * Generates a secure passphrase based on browser fingerprinting
  * This creates a unique passphrase that's tied to the user's browser
  * but doesn't require them to remember anything
+ *
+ * The passphrase is deterministic and consistent across browser sessions
+ * to ensure tokens can be decrypted after closing/reopening the tab
  */
 export function generateSecurePassphrase(): string {
   // Create a fingerprint from various browser characteristics
+  // Note: We exclude time-based values to ensure consistency across sessions
   const fingerprint = [
     navigator.userAgent,
     navigator.language,
     screen.width + "x" + screen.height,
     new Date().getTimezoneOffset().toString(),
     navigator.platform,
-    // Add some entropy
-    Math.random().toString(36),
-    Date.now().toString(36),
+    // Use a fixed seed for consistency across sessions
+    "browser_fingerprint_seed",
   ].join("|");
 
   // Hash the fingerprint to create a consistent passphrase

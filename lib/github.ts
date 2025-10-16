@@ -30,6 +30,9 @@ export interface GitHubPR {
   reviews?: Array<{
     state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
     submitted_at: string;
+    user: {
+      login: string;
+    };
   }>;
 }
 
@@ -40,10 +43,14 @@ export interface ProcessedPR {
   number: number;
   author: string;
   authorAvatar: string;
-  status: "pending" | "re-review" | "stagnant";
+  status: "pending" | "re-review" | "stagnant" | "reviewed";
   updatedAt: string;
+  updatedAtTimestamp: string;
+  createdAt: string;
+  createdAtTimestamp: string;
   labels: string[];
   url: string;
+  lastReviewedByCurrentUser: string | null;
 }
 
 export interface GitHubError {
@@ -85,6 +92,9 @@ export async function fetchPullRequests(
   const allPRs: ProcessedPR[] = [];
 
   try {
+    // Get current user information
+    const currentUser = await getCurrentUser(token);
+
     // Fetch PRs for all repositories in parallel
     const promises = repos.map(async (repo) => {
       const [owner, repoName] = repo.split("/");
@@ -111,8 +121,28 @@ export async function fetchPullRequests(
 
       const prs: GitHubPR[] = await response.json();
 
-      // Process each PR
-      const processedPRs = prs.map((pr) => processPR(pr, repo));
+      // Fetch reviews for each PR
+      const prsWithReviews = await Promise.all(
+        prs.map(async (pr) => {
+          try {
+            const reviewsUrl = `${GITHUB_API_BASE}/repos/${owner}/${repoName}/pulls/${pr.number}/reviews`;
+            const reviewsResponse = await fetch(reviewsUrl, { headers });
+
+            if (reviewsResponse.ok) {
+              const reviews = await reviewsResponse.json();
+              return { ...pr, reviews };
+            }
+            return pr; // Return PR without reviews if fetch fails
+          } catch {
+            return pr; // Return PR without reviews if fetch fails
+          }
+        })
+      );
+
+      // Process each PR with current user context
+      const processedPRs = prsWithReviews.map((pr) =>
+        processPR(pr, repo, currentUser.login)
+      );
 
       return processedPRs;
     });
@@ -142,9 +172,33 @@ export async function fetchPullRequests(
   }
 }
 
-export function processPR(pr: GitHubPR, repo: string): ProcessedPR {
-  const status = calculatePRStatus(pr);
+export function processPR(
+  pr: GitHubPR,
+  repo: string,
+  currentUser: string
+): ProcessedPR {
+  const status = calculatePRStatus(pr, currentUser);
   const updatedAt = formatRelativeTime(pr.updated_at);
+
+  // Find the most recent review by the current user
+  const userReviews =
+    pr.reviews?.filter(
+      (review) =>
+        review.state !== "DISMISSED" &&
+        review.submitted_at &&
+        review.user.login === currentUser
+    ) || [];
+
+  const lastReviewedByCurrentUser =
+    userReviews.length > 0
+      ? userReviews
+          .filter((review) => review.submitted_at)
+          .sort(
+            (a, b) =>
+              new Date(b.submitted_at!).getTime() -
+              new Date(a.submitted_at!).getTime()
+          )[0]?.submitted_at || null
+      : null;
 
   return {
     id: pr.id,
@@ -155,14 +209,19 @@ export function processPR(pr: GitHubPR, repo: string): ProcessedPR {
     authorAvatar: pr.user.avatar_url,
     status,
     updatedAt,
+    updatedAtTimestamp: pr.updated_at,
+    createdAt: formatRelativeTime(pr.created_at),
+    createdAtTimestamp: pr.created_at,
     labels: pr.labels.map((label) => label.name),
     url: pr.html_url,
+    lastReviewedByCurrentUser,
   };
 }
 
 export function calculatePRStatus(
-  pr: GitHubPR
-): "pending" | "re-review" | "stagnant" {
+  pr: GitHubPR,
+  currentUser: string
+): "pending" | "re-review" | "stagnant" | "reviewed" {
   const now = new Date();
   const updatedAt = new Date(pr.updated_at);
   const daysSinceUpdate =
@@ -173,16 +232,48 @@ export function calculatePRStatus(
     return "stagnant";
   }
 
-  // Check if there are requested changes or pending reviews
-  // For now, we'll use a simple heuristic based on age and draft status
-  // In a real implementation, you'd fetch review data separately
+  // Check if the current user has reviewed this PR
+  const userReviews =
+    pr.reviews?.filter(
+      (review) =>
+        review.state !== "DISMISSED" &&
+        review.submitted_at &&
+        review.user.login === currentUser
+    ) || [];
 
-  // Re-review: draft PRs or recently updated PRs that might need review
-  if (pr.draft || daysSinceUpdate <= 1) {
+  if (userReviews.length === 0) {
+    // User has never reviewed this PR
+    return "pending";
+  }
+
+  // Find the most recent review by the current user
+  const mostRecentUserReview = userReviews
+    .filter((review) => review.submitted_at)
+    .sort(
+      (a, b) =>
+        new Date(b.submitted_at!).getTime() -
+        new Date(a.submitted_at!).getTime()
+    )[0];
+
+  if (!mostRecentUserReview) {
+    return "pending";
+  }
+
+  // Check if PR has been updated since the user's last review
+  const lastReviewDate = new Date(mostRecentUserReview.submitted_at!);
+  const prUpdatedDate = new Date(pr.updated_at);
+
+  if (prUpdatedDate > lastReviewDate) {
     return "re-review";
   }
 
-  // Pending: everything else
+  // PR hasn't been updated since user's last review
+  // Check if the user's most recent review was an approval
+  if (mostRecentUserReview.state === "APPROVED") {
+    return "reviewed";
+  }
+
+  // User has reviewed but not approved, and PR hasn't been updated
   return "pending";
 }
 
@@ -217,6 +308,50 @@ export function formatRelativeTime(dateString: string): string {
 
   const diffInMonths = Math.floor(diffInDays / 30);
   return `${diffInMonths}mo ago`;
+}
+
+export interface GitHubUser {
+  login: string;
+  id: number;
+  avatar_url: string;
+  name?: string;
+  email?: string;
+}
+
+export async function getCurrentUser(token: string): Promise<GitHubUser> {
+  if (!token) {
+    throw new GitHubAPIError("GitHub token is required", 401);
+  }
+
+  const headers = {
+    Accept: "application/vnd.github+json",
+    Authorization: `Bearer ${token}`,
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+
+  try {
+    const response = await fetch(`${GITHUB_API_BASE}/user`, { headers });
+
+    if (!response.ok) {
+      const errorData: GitHubError = await response.json().catch(() => ({}));
+      throw new GitHubAPIError(
+        errorData.message || "Failed to fetch user information",
+        response.status
+      );
+    }
+
+    return await response.json();
+  } catch (error) {
+    if (error instanceof GitHubAPIError) {
+      throw error;
+    }
+    throw new GitHubAPIError(
+      `Failed to fetch user information: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`,
+      500
+    );
+  }
 }
 
 export async function validateToken(token: string): Promise<boolean> {

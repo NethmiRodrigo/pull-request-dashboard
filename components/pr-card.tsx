@@ -2,7 +2,13 @@ import Image from "next/image";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ExternalLink, Clock, AlertCircle, RefreshCw } from "lucide-react";
+import {
+  ExternalLink,
+  Clock,
+  AlertCircle,
+  RefreshCw,
+  CheckCircle,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface PR {
@@ -12,10 +18,14 @@ export interface PR {
   number: number;
   author: string;
   authorAvatar: string;
-  status: "pending" | "re-review" | "stagnant";
+  status: "pending" | "re-review" | "stagnant" | "reviewed";
   updatedAt: string;
+  updatedAtTimestamp: string;
+  createdAt: string;
+  createdAtTimestamp: string;
   labels: string[];
   url: string;
+  lastReviewedByCurrentUser: string | null;
 }
 
 interface PRCardProps {
@@ -41,6 +51,12 @@ export function PRCard({ pr }: PRCardProps) {
       label: "Stagnant",
       color: "text-destructive",
       bgColor: "bg-destructive/10",
+    },
+    reviewed: {
+      icon: CheckCircle,
+      label: "Reviewed",
+      color: "text-success",
+      bgColor: "bg-success/10",
     },
   };
 
