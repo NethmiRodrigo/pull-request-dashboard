@@ -1,6 +1,8 @@
 # Pull Request Dashboard
 
-A Next.js dashboard for tracking pull requests across multiple GitHub repositories.
+A Next.js dashboard for tracking pull requests across multiple GitHub repositories, because the GitHub homepage sucks and I have too many PRs to keep track off. GitHub, your notifications page is too noisy.
+
+Vibe coded with v0 and Cursor, use with caution, thanks.
 
 ## Features
 
