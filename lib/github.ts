@@ -108,22 +108,47 @@ export async function fetchPullRequests(
     // Flatten all PRs into a single array
     results.forEach((prs) => allPRs.push(...prs));
 
-    // Remove duplicates based on PR ID (same PR might appear in both watched repos and review-requested)
-    const uniquePRs = allPRs.reduce((acc, pr) => {
-      if (!acc.find((existingPR) => existingPR.id === pr.id)) {
-        acc.push(pr);
+    // Simple and robust deduplication: use a Map with composite key (repo + number)
+
+    const prMap = new Map<string, ProcessedPR>();
+
+    for (const pr of allPRs) {
+      // Create composite key: repo + number (e.g., "owner/repo#123")
+      const compositeKey = `${pr.repo}#${pr.number}`;
+      const existingPR = prMap.get(compositeKey);
+
+      if (!existingPR) {
+        // PR doesn't exist yet, add it
+        prMap.set(compositeKey, pr);
+      } else {
+        // PR already exists, always prioritize review-requested version
+
+        if (pr.isReviewRequested) {
+          // New PR is review-requested, always replace
+          prMap.set(compositeKey, pr);
+        }
       }
-      return acc;
-    }, [] as ProcessedPR[]);
+    }
+
+    // Convert back to array and ensure no duplicates
+    const uniquePRs = Array.from(prMap.values());
+
+    // Final safety check: remove any remaining duplicates by composite key
+    const finalUniquePRs = uniquePRs.filter(
+      (pr, index, arr) =>
+        arr.findIndex(
+          (p) => `${p.repo}#${p.number}` === `${pr.repo}#${pr.number}`
+        ) === index
+    );
 
     // Sort by updated_at (most recent first)
-    uniquePRs.sort(
+    finalUniquePRs.sort(
       (a, b) =>
         new Date(b.updatedAtTimestamp).getTime() -
         new Date(a.updatedAtTimestamp).getTime()
     );
 
-    return uniquePRs;
+    return finalUniquePRs;
   } catch (error) {
     if (error instanceof GitHubAPIError) {
       throw error;
