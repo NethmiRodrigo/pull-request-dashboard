@@ -163,12 +163,250 @@ export function generateSecurePassphrase(): string {
 
 /**
  * Checks if the current browser supports the required crypto operations
+ * Includes Windows-specific compatibility checks and secure context validation
  */
 export function isCryptoSupported(): boolean {
-  return (
-    typeof crypto !== "undefined" &&
-    typeof crypto.subtle !== "undefined" &&
-    typeof TextEncoder !== "undefined" &&
-    typeof TextDecoder !== "undefined"
-  );
+  // Check if we're in a secure context first
+  if (typeof window !== "undefined" && !window.isSecureContext) {
+    return false;
+  }
+
+  // Basic feature checks
+  if (
+    typeof crypto === "undefined" ||
+    typeof crypto.subtle === "undefined" ||
+    typeof TextEncoder === "undefined" ||
+    typeof TextDecoder === "undefined"
+  ) {
+    return false;
+  }
+
+  // Additional Windows-specific checks
+  try {
+    // Check if crypto.subtle is actually functional (not just defined)
+    if (!crypto.subtle.encrypt || !crypto.subtle.decrypt) {
+      return false;
+    }
+
+    // Test TextEncoder/TextDecoder functionality
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const testString = "test";
+    const encoded = encoder.encode(testString);
+    const decoded = decoder.decode(encoded);
+
+    if (decoded !== testString) {
+      return false;
+    }
+
+    // Check for Windows-specific issues with Web Crypto API
+    // Some older Windows browsers have partial crypto.subtle support
+    if (typeof window !== "undefined") {
+      const userAgent = navigator.userAgent.toLowerCase();
+
+      // Check for known problematic Windows browser versions
+      if (userAgent.includes("windows")) {
+        // Check for Internet Explorer or very old Edge
+        if (userAgent.includes("msie") || userAgent.includes("trident")) {
+          return false;
+        }
+
+        // Check for very old Edge versions (before Chromium-based Edge)
+        if (userAgent.includes("edge/") && !userAgent.includes("edg/")) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  } catch (error) {
+    console.warn("Crypto support check failed:", error);
+    return false;
+  }
+}
+
+/**
+ * Gets detailed information about crypto support for debugging
+ * Useful for providing better error messages to users
+ */
+export function getCryptoSupportInfo(): {
+  supported: boolean;
+  issues: string[];
+  browserInfo: string;
+  isSecureContext: boolean;
+  protocol: string;
+} {
+  const issues: string[] = [];
+  let supported = true;
+  let isSecureContext = true;
+  let protocol = "unknown";
+
+  // Check secure context first
+  if (typeof window !== "undefined") {
+    isSecureContext = window.isSecureContext;
+    protocol = window.location.protocol;
+
+    if (!isSecureContext) {
+      issues.push("Not running in a secure context (HTTPS required)");
+      supported = false;
+    }
+  }
+
+  // Check basic features
+  if (typeof crypto === "undefined") {
+    issues.push("Web Crypto API not available");
+    supported = false;
+  }
+
+  if (typeof crypto?.subtle === "undefined") {
+    if (isSecureContext) {
+      issues.push(
+        "crypto.subtle not available (may be a browser compatibility issue)"
+      );
+    } else {
+      issues.push(
+        "crypto.subtle not available (requires secure context/HTTPS)"
+      );
+    }
+    supported = false;
+  }
+
+  if (typeof TextEncoder === "undefined") {
+    issues.push("TextEncoder not available");
+    supported = false;
+  }
+
+  if (typeof TextDecoder === "undefined") {
+    issues.push("TextDecoder not available");
+    supported = false;
+  }
+
+  // Get browser information
+  let browserInfo = "Unknown browser";
+  if (typeof window !== "undefined") {
+    const userAgent = navigator.userAgent;
+    browserInfo = userAgent;
+
+    // Check for specific Windows browser issues
+    if (userAgent.toLowerCase().includes("windows")) {
+      if (userAgent.includes("MSIE") || userAgent.includes("Trident")) {
+        issues.push("Internet Explorer is not supported");
+        supported = false;
+      } else if (userAgent.includes("Edge/") && !userAgent.includes("Edg/")) {
+        issues.push(
+          "Legacy Edge browser is not supported. Please update to the new Chromium-based Edge."
+        );
+        supported = false;
+      }
+    }
+  }
+
+  return {
+    supported,
+    issues,
+    browserInfo,
+    isSecureContext,
+    protocol,
+  };
+}
+
+/**
+ * Fallback encryption using a simple XOR cipher for HTTP contexts
+ * This is less secure than Web Crypto API but works on HTTP
+ */
+function simpleXorEncrypt(text: string, key: string): string {
+  let result = "";
+  for (let i = 0; i < text.length; i++) {
+    result += String.fromCharCode(
+      text.charCodeAt(i) ^ key.charCodeAt(i % key.length)
+    );
+  }
+  return btoa(result);
+}
+
+/**
+ * Fallback decryption using a simple XOR cipher for HTTP contexts
+ */
+function simpleXorDecrypt(encryptedData: string, key: string): string {
+  try {
+    const decoded = atob(encryptedData);
+    let result = "";
+    for (let i = 0; i < decoded.length; i++) {
+      result += String.fromCharCode(
+        decoded.charCodeAt(i) ^ key.charCodeAt(i % key.length)
+      );
+    }
+    return result;
+  } catch {
+    throw new Error("Failed to decrypt token");
+  }
+}
+
+/**
+ * Encrypts a token using the best available method
+ * Uses Web Crypto API if available, falls back to XOR for HTTP
+ */
+export async function encryptTokenFallback(
+  token: string,
+  passphrase: string
+): Promise<string> {
+  if (isCryptoSupported()) {
+    // Use secure Web Crypto API
+    return await encryptToken(token, passphrase);
+  } else {
+    // Fall back to simple XOR encryption for HTTP
+    console.warn(
+      "⚠️ Using fallback encryption (less secure) - consider using HTTPS"
+    );
+    return simpleXorEncrypt(token, passphrase);
+  }
+}
+
+/**
+ * Decrypts a token using the best available method
+ * Uses Web Crypto API if available, falls back to XOR for HTTP
+ */
+export async function decryptTokenFallback(
+  encryptedData: string,
+  passphrase: string
+): Promise<string> {
+  if (isCryptoSupported()) {
+    // Use secure Web Crypto API
+    return await decryptToken(encryptedData, passphrase);
+  } else {
+    // Fall back to simple XOR decryption for HTTP
+    console.warn(
+      "⚠️ Using fallback decryption (less secure) - consider using HTTPS"
+    );
+    return simpleXorDecrypt(encryptedData, passphrase);
+  }
+}
+
+/**
+ * Debug function to help troubleshoot crypto issues
+ * Call this in the browser console to see detailed information
+ */
+export function debugCryptoSupport(): void {
+  const info = getCryptoSupportInfo();
+  console.log("🔍 Crypto Support Debug Information:");
+  console.log("=====================================");
+  console.log("✅ Supported:", info.supported);
+  console.log("🔒 Secure Context:", info.isSecureContext);
+  console.log("🌐 Protocol:", info.protocol);
+  console.log("🌍 Browser:", info.browserInfo);
+  console.log("❌ Issues:", info.issues);
+
+  if (typeof window !== "undefined") {
+    console.log("🔧 Additional Info:");
+    console.log("- window.isSecureContext:", window.isSecureContext);
+    console.log("- window.location.protocol:", window.location.protocol);
+    console.log("- window.location.hostname:", window.location.hostname);
+    console.log("- crypto available:", typeof crypto !== "undefined");
+    console.log(
+      "- crypto.subtle available:",
+      typeof crypto?.subtle !== "undefined"
+    );
+    console.log("- TextEncoder available:", typeof TextEncoder !== "undefined");
+    console.log("- TextDecoder available:", typeof TextDecoder !== "undefined");
+  }
 }

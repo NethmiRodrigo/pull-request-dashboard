@@ -6,10 +6,9 @@
  */
 
 import {
-  encryptToken,
-  decryptToken,
+  encryptTokenFallback,
+  decryptTokenFallback,
   generateSecurePassphrase,
-  isCryptoSupported,
 } from "./crypto";
 
 const TOKEN_STORAGE_KEY = "github_token_encrypted";
@@ -24,20 +23,14 @@ const PASSPHRASE_STORAGE_KEY = "github_token_passphrase";
 export async function storeTokenSecurely(token: string): Promise<void> {
   console.log("💾 storeTokenSecurely called");
 
-  if (!isCryptoSupported()) {
-    throw new Error(
-      "Your browser does not support the required encryption features"
-    );
-  }
-
   try {
     // Generate a unique passphrase for this browser session
     const passphrase = generateSecurePassphrase();
     console.log("🔑 Generated passphrase length:", passphrase.length);
 
-    // Encrypt the token
+    // Encrypt the token using the best available method
     console.log("🔒 Encrypting token...");
-    const encryptedToken = await encryptToken(token, passphrase);
+    const encryptedToken = await encryptTokenFallback(token, passphrase);
     console.log("✅ Token encrypted, length:", encryptedToken.length);
 
     // Store both the encrypted token and passphrase
@@ -60,11 +53,6 @@ export async function storeTokenSecurely(token: string): Promise<void> {
 export async function getStoredToken(): Promise<string | null> {
   console.log("🔍 getStoredToken called");
 
-  if (!isCryptoSupported()) {
-    console.warn("Crypto not supported, cannot retrieve encrypted token");
-    return null;
-  }
-
   try {
     const encryptedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
     const passphrase = localStorage.getItem(PASSPHRASE_STORAGE_KEY);
@@ -81,9 +69,12 @@ export async function getStoredToken(): Promise<string | null> {
       return null;
     }
 
-    // Decrypt the token
+    // Decrypt the token using the best available method
     console.log("🔓 Attempting to decrypt token...");
-    const decryptedToken = await decryptToken(encryptedToken, passphrase);
+    const decryptedToken = await decryptTokenFallback(
+      encryptedToken,
+      passphrase
+    );
     console.log("✅ Token decrypted successfully");
     return decryptedToken;
   } catch (error) {
@@ -95,7 +86,7 @@ export async function getStoredToken(): Promise<string | null> {
       const encryptedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
       if (encryptedToken) {
         const newPassphrase = generateSecurePassphrase();
-        const decryptedToken = await decryptToken(
+        const decryptedToken = await decryptTokenFallback(
           encryptedToken,
           newPassphrase
         );
@@ -171,12 +162,18 @@ export async function migrateEncryptedToken(): Promise<void> {
   }
 
   try {
-    // Try to decrypt with the old passphrase
-    const decryptedToken = await decryptToken(encryptedToken, oldPassphrase);
+    // Try to decrypt with the old passphrase using the best available method
+    const decryptedToken = await decryptTokenFallback(
+      encryptedToken,
+      oldPassphrase
+    );
 
     // If successful, re-encrypt with the new passphrase generation method
     const newPassphrase = generateSecurePassphrase();
-    const newEncryptedToken = await encryptToken(decryptedToken, newPassphrase);
+    const newEncryptedToken = await encryptTokenFallback(
+      decryptedToken,
+      newPassphrase
+    );
 
     // Update storage with new encrypted token and passphrase
     localStorage.setItem(TOKEN_STORAGE_KEY, newEncryptedToken);

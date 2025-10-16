@@ -11,7 +11,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { validateToken } from "@/lib/github";
-import { isCryptoSupported } from "@/lib/crypto";
+import { getCryptoSupportInfo } from "@/lib/crypto";
 
 interface TokenSetupProps {
   onTokenSet: (token: string) => void;
@@ -23,10 +23,19 @@ export function TokenSetup({ onTokenSet }: TokenSetupProps) {
   const [error, setError] = useState("");
   const [isValid, setIsValid] = useState(false);
   const [cryptoSupported, setCryptoSupported] = useState(true);
+  const [cryptoSupportInfo, setCryptoSupportInfo] = useState<{
+    supported: boolean;
+    issues: string[];
+    browserInfo: string;
+    isSecureContext: boolean;
+    protocol: string;
+  } | null>(null);
 
   // Check crypto support on component mount
   useEffect(() => {
-    setCryptoSupported(isCryptoSupported());
+    const supportInfo = getCryptoSupportInfo();
+    setCryptoSupportInfo(supportInfo);
+    setCryptoSupported(supportInfo.supported);
   }, []);
 
   const handleTokenSubmit = async () => {
@@ -35,12 +44,8 @@ export function TokenSetup({ onTokenSet }: TokenSetupProps) {
       return;
     }
 
-    if (!cryptoSupported) {
-      setError(
-        "Your browser does not support the required encryption features. Please use a modern browser."
-      );
-      return;
-    }
+    // Note: We no longer block HTTP usage, but we'll show a warning in the UI
+    // The fallback encryption will handle HTTP contexts
 
     setIsValidating(true);
     setError("");
@@ -111,6 +116,75 @@ export function TokenSetup({ onTokenSet }: TokenSetupProps) {
               <div className="flex items-center gap-2 text-sm text-destructive">
                 <XCircle className="h-4 w-4" />
                 {error}
+              </div>
+            )}
+            {!cryptoSupported && cryptoSupportInfo && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="h-5 w-5 text-yellow-600 mt-0.5" />
+                  <div className="text-sm">
+                    <p className="font-medium text-yellow-800 mb-2">
+                      {!cryptoSupportInfo.isSecureContext
+                        ? "Using Fallback Encryption"
+                        : "Browser Compatibility Issue"}
+                    </p>
+                    <p className="text-yellow-700 mb-2">
+                      {!cryptoSupportInfo.isSecureContext
+                        ? "You're using HTTP, so we're using a fallback encryption method. For better security, consider using HTTPS."
+                        : "Your browser doesn&apos;t support the required encryption features for secure token storage."}
+                    </p>
+                    <div className="text-yellow-700">
+                      <p className="font-medium mb-1">Recommended solutions:</p>
+                      <ul className="list-disc list-inside space-y-1">
+                        {!cryptoSupportInfo.isSecureContext ? (
+                          <>
+                            <li>
+                              For better security, access via HTTPS when
+                              possible
+                            </li>
+                            <li>
+                              For local development, use{" "}
+                              <code className="bg-yellow-100 px-1 rounded">
+                                http://localhost
+                              </code>{" "}
+                              or{" "}
+                              <code className="bg-yellow-100 px-1 rounded">
+                                http://127.0.0.1
+                              </code>
+                            </li>
+                            <li>
+                              The app will work on HTTP but with less secure
+                              encryption
+                            </li>
+                          </>
+                        ) : (
+                          <>
+                            <li>
+                              Update to the latest version of Chrome, Firefox,
+                              or Edge
+                            </li>
+                            <li>
+                              If using Windows, make sure you&apos;re using the
+                              new Chromium-based Edge (not the legacy version)
+                            </li>
+                            <li>
+                              Enable JavaScript and ensure your browser is up to
+                              date
+                            </li>
+                          </>
+                        )}
+                      </ul>
+                      {cryptoSupportInfo.protocol && (
+                        <p className="mt-2 text-xs text-yellow-600">
+                          Current protocol:{" "}
+                          <code className="bg-yellow-100 px-1 rounded">
+                            {cryptoSupportInfo.protocol}
+                          </code>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
             {isValid && (
