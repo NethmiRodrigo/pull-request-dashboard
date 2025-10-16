@@ -34,6 +34,7 @@ import {
   getStoredToken,
   clearStoredToken,
   migratePlainTextToken,
+  migrateEncryptedToken,
 } from "@/lib/token-storage";
 
 type PRStatus =
@@ -51,6 +52,7 @@ export function PRDashboard() {
   const [showSettings, setShowSettings] = useState(false);
   const [watchedRepos, setWatchedRepos] = useState<string[]>([]);
   const [githubToken, setGithubToken] = useState<string | null>(null);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [prs, setPRs] = useState<PR[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,30 +62,50 @@ export function PRDashboard() {
   // Load saved data from localStorage
   useEffect(() => {
     const loadData = async () => {
+      console.log("🚀 PRDashboard: Starting data load");
+
       // Load watched repositories
       const savedRepos = localStorage.getItem("watchedRepos");
       if (savedRepos) {
         setWatchedRepos(JSON.parse(savedRepos));
+        console.log("📁 Loaded watched repos:", JSON.parse(savedRepos));
       } else {
         setWatchedRepos(["vercel/next.js", "vercel/turbo", "vercel/commerce"]);
+        console.log("📁 Using default watched repos");
       }
 
       // Migrate plain text token to encrypted storage if needed
       try {
+        console.log("🔄 Checking for plain text token migration...");
         await migratePlainTextToken();
       } catch (error) {
         console.error("Failed to migrate token:", error);
       }
 
+      // Migrate encrypted token to new passphrase method if needed
+      try {
+        console.log("🔄 Checking for encrypted token migration...");
+        await migrateEncryptedToken();
+      } catch (error) {
+        console.error("Failed to migrate encrypted token:", error);
+      }
+
       // Load encrypted token
       try {
+        console.log("🔍 Attempting to load stored token...");
         const token = await getStoredToken();
         if (token) {
+          console.log("✅ Token loaded successfully, length:", token.length);
           setGithubToken(token);
+        } else {
+          console.log("❌ No token found");
         }
       } catch (error) {
-        console.error("Failed to load stored token:", error);
+        console.error("❌ Failed to load stored token:", error);
       }
+
+      // Mark initial load as complete
+      setIsInitialLoad(false);
     };
 
     loadData();
@@ -92,6 +114,14 @@ export function PRDashboard() {
   // Save token securely when it changes
   useEffect(() => {
     const saveToken = async () => {
+      console.log(
+        "💾 Token changed, attempting to save:",
+        !!githubToken,
+        "isInitialLoad:",
+        isInitialLoad
+      );
+
+      // Don't clear token during initial load - it might be loading from storage
       if (githubToken) {
         try {
           await storeTokenSecurely(githubToken);
@@ -99,13 +129,17 @@ export function PRDashboard() {
           console.error("Failed to store token securely:", error);
           setError("Failed to store token securely. Please try again.");
         }
-      } else {
+      } else if (!isInitialLoad) {
+        // Only clear token if it's not the initial load
+        console.log("🧹 Clearing stored token");
         clearStoredToken();
+      } else {
+        console.log("⏳ Skipping token clear during initial load");
       }
     };
 
     saveToken();
-  }, [githubToken]);
+  }, [githubToken, isInitialLoad]);
 
   const handleUpdateRepos = (repos: string[]) => {
     setWatchedRepos(repos);

@@ -144,16 +144,15 @@ export async function decryptToken(
  * to ensure tokens can be decrypted after closing/reopening the tab
  */
 export function generateSecurePassphrase(): string {
-  // Create a fingerprint from various browser characteristics
-  // Note: We exclude time-based values to ensure consistency across sessions
+  // Create a fingerprint from stable browser characteristics only
+  // These should remain consistent across browser sessions
   const fingerprint = [
     navigator.userAgent,
     navigator.language,
-    screen.width + "x" + screen.height,
-    new Date().getTimezoneOffset().toString(),
     navigator.platform,
+    screen.width + "x" + screen.height,
     // Use a fixed seed for consistency across sessions
-    "browser_fingerprint_seed",
+    "browser_fingerprint_seed_v1",
   ].join("|");
 
   // Hash the fingerprint to create a consistent passphrase

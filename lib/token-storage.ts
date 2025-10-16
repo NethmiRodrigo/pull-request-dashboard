@@ -22,6 +22,8 @@ const PASSPHRASE_STORAGE_KEY = "github_token_passphrase";
  * @returns Promise that resolves when storage is complete
  */
 export async function storeTokenSecurely(token: string): Promise<void> {
+  console.log("💾 storeTokenSecurely called");
+
   if (!isCryptoSupported()) {
     throw new Error(
       "Your browser does not support the required encryption features"
@@ -31,17 +33,21 @@ export async function storeTokenSecurely(token: string): Promise<void> {
   try {
     // Generate a unique passphrase for this browser session
     const passphrase = generateSecurePassphrase();
+    console.log("🔑 Generated passphrase length:", passphrase.length);
 
     // Encrypt the token
+    console.log("🔒 Encrypting token...");
     const encryptedToken = await encryptToken(token, passphrase);
+    console.log("✅ Token encrypted, length:", encryptedToken.length);
 
     // Store both the encrypted token and passphrase
     // The passphrase is also derived from browser characteristics,
     // so it's unique to this browser but consistent across sessions
     localStorage.setItem(TOKEN_STORAGE_KEY, encryptedToken);
     localStorage.setItem(PASSPHRASE_STORAGE_KEY, passphrase);
+    console.log("✅ Token stored in localStorage");
   } catch (error) {
-    console.error("Failed to store token securely:", error);
+    console.error("❌ Failed to store token securely:", error);
     throw new Error("Failed to store token securely");
   }
 }
@@ -52,6 +58,8 @@ export async function storeTokenSecurely(token: string): Promise<void> {
  * @returns Promise that resolves to the decrypted token, or null if no token is stored
  */
 export async function getStoredToken(): Promise<string | null> {
+  console.log("🔍 getStoredToken called");
+
   if (!isCryptoSupported()) {
     console.warn("Crypto not supported, cannot retrieve encrypted token");
     return null;
@@ -61,16 +69,50 @@ export async function getStoredToken(): Promise<string | null> {
     const encryptedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
     const passphrase = localStorage.getItem(PASSPHRASE_STORAGE_KEY);
 
+    console.log("📦 localStorage check:", {
+      hasEncryptedToken: !!encryptedToken,
+      hasPassphrase: !!passphrase,
+      encryptedTokenLength: encryptedToken?.length || 0,
+      passphraseLength: passphrase?.length || 0,
+    });
+
     if (!encryptedToken || !passphrase) {
+      console.log("❌ No encrypted token or passphrase found");
       return null;
     }
 
     // Decrypt the token
+    console.log("🔓 Attempting to decrypt token...");
     const decryptedToken = await decryptToken(encryptedToken, passphrase);
+    console.log("✅ Token decrypted successfully");
     return decryptedToken;
   } catch (error) {
-    console.error("Failed to retrieve stored token:", error);
-    // If decryption fails, clear the stored data
+    console.error("❌ Failed to retrieve stored token:", error);
+
+    // Try to regenerate the passphrase and decrypt with the new one
+    // This handles cases where the passphrase generation algorithm changed
+    try {
+      const encryptedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
+      if (encryptedToken) {
+        const newPassphrase = generateSecurePassphrase();
+        const decryptedToken = await decryptToken(
+          encryptedToken,
+          newPassphrase
+        );
+
+        // If successful, update the stored passphrase
+        localStorage.setItem(PASSPHRASE_STORAGE_KEY, newPassphrase);
+        console.log("Successfully decrypted token with regenerated passphrase");
+        return decryptedToken;
+      }
+    } catch (retryError) {
+      console.error(
+        "Failed to decrypt with regenerated passphrase:",
+        retryError
+      );
+    }
+
+    // If all attempts fail, clear the stored data
     clearStoredToken();
     return null;
   }
@@ -113,5 +155,39 @@ export async function migratePlainTextToken(): Promise<void> {
       console.error("Failed to migrate token to encrypted storage:", error);
       throw error;
     }
+  }
+}
+
+/**
+ * Migrates tokens encrypted with old passphrase generation to new method
+ * This handles cases where the passphrase algorithm was updated
+ */
+export async function migrateEncryptedToken(): Promise<void> {
+  const encryptedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
+  const oldPassphrase = localStorage.getItem(PASSPHRASE_STORAGE_KEY);
+
+  if (!encryptedToken || !oldPassphrase) {
+    return;
+  }
+
+  try {
+    // Try to decrypt with the old passphrase
+    const decryptedToken = await decryptToken(encryptedToken, oldPassphrase);
+
+    // If successful, re-encrypt with the new passphrase generation method
+    const newPassphrase = generateSecurePassphrase();
+    const newEncryptedToken = await encryptToken(decryptedToken, newPassphrase);
+
+    // Update storage with new encrypted token and passphrase
+    localStorage.setItem(TOKEN_STORAGE_KEY, newEncryptedToken);
+    localStorage.setItem(PASSPHRASE_STORAGE_KEY, newPassphrase);
+
+    console.log(
+      "Successfully migrated encrypted token to new passphrase method"
+    );
+  } catch (error) {
+    // If decryption fails, the token might already be using the new method
+    // or there might be a different issue - don't throw, just log
+    console.log("Token migration not needed or failed:", error);
   }
 }
